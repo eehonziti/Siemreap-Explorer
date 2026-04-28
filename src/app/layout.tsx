@@ -1,9 +1,20 @@
 import type { Metadata } from "next";
+import { Playfair_Display, Source_Sans_3 } from "next/font/google";
 import "./globals.css";
 
+const playfair = Playfair_Display({
+    subsets: ["latin"],
+    variable: "--font-heading",
+});
+
+const sourceSans = Source_Sans_3({
+    subsets: ["latin"],
+    variable: "--font-body",
+});
+
 export const metadata: Metadata = {
-    title: "City Explorer",
-    description: "Search any city to see its map, weather, and markets",
+    title: "Siem Reap Tourism Website",
+    description: "Discover weather, maps, and live exchange rates for Siem Reap",
 };
 
 export default function RootLayout({
@@ -13,7 +24,7 @@ export default function RootLayout({
 }>) {
     return (
         <html lang="en">
-            <body>{children}</body>
+            <body className={`${playfair.variable} ${sourceSans.variable}`}>{children}</body>
         </html>
     );
 }

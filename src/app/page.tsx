@@ -1,188 +1,208 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
-import { useState } from "react";
-import SearchBar from "@/components/SearchBar";
-import StockPanel from "@/components/StockPanel";
-import WeatherPanel from "@/components/WeatherPanel";
-import { fetchCityCoords } from "@/lib/fetchCityCoords";
-import { fetchStocks } from "@/lib/fetchStocks";
-import { fetchWeather } from "@/lib/fetchWeather";
-import { Coords, StockData, WeatherData } from "@/types";
+import CurrencyConverter from "@/components/CurrencyConverter";
+import ExchangeCard from "@/components/ExchangeCard";
+import HeroSection from "@/components/HeroSection";
+import LoadingSkeleton from "@/components/LoadingSkeleton";
+import WeatherCard from "@/components/WeatherCard";
+import type { ExchangeApiResponse } from "@/types/exchange";
+import type { WeatherApiResponse } from "@/types/weather";
 
-const MapPanel = dynamic(() => import("@/components/MapPanel"), { ssr: false });
+const MapView = dynamic(() => import("../components/MapView"), { ssr: false });
 
-interface EmptyStateCardProps {
-    title: string;
-    message: string;
-}
-
-function EmptyStateCard({ title, message }: EmptyStateCardProps) {
-    return (
-        <article className="panel-rise rounded-2xl border border-white/70 bg-white/75 p-5 shadow-[0_20px_60px_-30px_rgba(15,23,42,0.35)] backdrop-blur">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                {title}
-            </p>
-            <p className="mt-3 text-sm leading-6 text-slate-600">{message}</p>
-        </article>
-    );
-}
-
-function getErrorMessage(error: unknown, fallback: string): string {
-    if (error instanceof Error && error.message.trim()) {
-        return error.message;
-    }
-
-    return fallback;
+function weatherCodeLabel(code: number): string {
+    if (code === 0) return "Clear";
+    if (code === 61) return "Rain";
+    if (code === 95) return "Thunderstorm";
+    return "Partly Cloudy";
 }
 
 export default function Home() {
-    const [city, setCity] = useState<string>("Siem Reap");
-    const [weather, setWeather] = useState<WeatherData | null>(null);
-    const [stocks, setStocks] = useState<StockData[] | null>(null);
-    const [coords, setCoords] = useState<Coords>({ lat: 13.3671, lng: 103.8448 });
-    const [loading, setLoading] = useState<boolean>(false);
-    const [error, setError] = useState<string>("");
-    const [notices, setNotices] = useState<string[]>([]);
-    const [hasSearched, setHasSearched] = useState<boolean>(false);
+    const [weatherData, setWeatherData] = useState<WeatherApiResponse | null>(null);
+    const [exchangeData, setExchangeData] = useState<ExchangeApiResponse | null>(null);
+    const [isLoading, setIsLoading] = useState<boolean>(true);
+    const [errorMessage, setErrorMessage] = useState<string>("");
+    const [lastExchangeRefresh, setLastExchangeRefresh] = useState<string>("");
 
-    const handleSearch = async (cityName: string): Promise<void> => {
-        const trimmedCity = cityName.trim();
-        if (!trimmedCity) {
-            return;
-        }
+    useEffect(() => {
+        async function loadData() {
+            setIsLoading(true);
+            setErrorMessage("");
 
-        setLoading(true);
-        setHasSearched(true);
-        setError("");
-        setNotices([]);
-
-        try {
-            const geocodedCoords = await fetchCityCoords(trimmedCity);
-
-            setCity(trimmedCity);
-            setCoords(geocodedCoords);
-
-            const [weatherResult, stocksResult] = await Promise.allSettled([
-                fetchWeather(trimmedCity),
-                fetchStocks(),
+            const [weatherResult, exchangeResult] = await Promise.allSettled([
+                fetch("/api/weather").then(async (response) => {
+                    if (!response.ok) {
+                        throw new Error("Weather data is unavailable.");
+                    }
+                    return (await response.json()) as WeatherApiResponse;
+                }),
+                fetch("/api/exchange").then(async (response) => {
+                    if (!response.ok) {
+                        throw new Error("Exchange rate data is unavailable.");
+                    }
+                    return (await response.json()) as ExchangeApiResponse;
+                }),
             ]);
 
-            const nextNotices: string[] = [];
-
             if (weatherResult.status === "fulfilled") {
-                setWeather(weatherResult.value);
-                setCoords({ lat: weatherResult.value.lat, lng: weatherResult.value.lng });
+                setWeatherData(weatherResult.value);
             } else {
-                setWeather(null);
-                nextNotices.push(
-                    `Weather unavailable: ${getErrorMessage(
-                        weatherResult.reason,
-                        "Unable to fetch weather data."
-                    )}`
+                setWeatherData(null);
+            }
+
+            if (exchangeResult.status === "fulfilled") {
+                setExchangeData(exchangeResult.value);
+                setLastExchangeRefresh(new Date().toLocaleTimeString("en-US"));
+            } else {
+                setExchangeData(null);
+            }
+
+            if (weatherResult.status === "rejected" || exchangeResult.status === "rejected") {
+                setErrorMessage(
+                    "Some live travel data is currently unavailable. You can still explore the guide and map."
                 );
             }
 
-            if (stocksResult.status === "fulfilled") {
-                setStocks(stocksResult.value);
-            } else {
-                setStocks(null);
-                nextNotices.push(
-                    `Stocks unavailable: ${getErrorMessage(
-                        stocksResult.reason,
-                        "Unable to fetch stock data."
-                    )}`
-                );
-            }
-
-            setNotices(nextNotices);
-        } catch (searchError: unknown) {
-            setWeather(null);
-            setStocks(null);
-            setError(getErrorMessage(searchError, "City not found. Please try another name."));
-        } finally {
-            setLoading(false);
+            setIsLoading(false);
         }
-    };
+
+        void loadData();
+    }, []);
+
+    useEffect(() => {
+        const refreshExchange = async () => {
+            try {
+                const response = await fetch("/api/exchange", { cache: "no-store" });
+                if (!response.ok) {
+                    throw new Error("Exchange rate data is unavailable.");
+                }
+
+                const data = (await response.json()) as ExchangeApiResponse;
+                setExchangeData(data);
+                setLastExchangeRefresh(new Date().toLocaleTimeString("en-US"));
+            } catch {
+                setErrorMessage(
+                    "Exchange rate updates are temporarily unavailable. Showing the most recent data."
+                );
+            }
+        };
+
+        const intervalId = setInterval(() => {
+            void refreshExchange();
+        }, 30000);
+
+        return () => clearInterval(intervalId);
+    }, []);
 
     return (
-        <main className="min-h-screen bg-[radial-gradient(circle_at_15%_20%,#cffafe_0%,#ecfeff_22%,#f8fafc_56%,#fff7ed_100%)] px-4 py-8 sm:px-6">
-            <div className="mx-auto max-w-5xl space-y-6">
-                <header className="panel-rise rounded-2xl border border-white/70 bg-white/75 p-6 shadow-[0_20px_60px_-30px_rgba(15,23,42,0.35)] backdrop-blur">
-                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-700">
-                        Explore smarter
-                    </p>
-                    <h1 className="mt-2 text-4xl font-black tracking-tight text-slate-900 sm:text-5xl">
-                        City Explorer
-                    </h1>
-                    <p className="mt-3 max-w-2xl text-sm text-slate-600 sm:text-base">
-                        Search any city to move the map instantly and pull weather and market
-                        snapshots when APIs are available.
-                    </p>
-                </header>
+        <main className="min-h-screen bg-[var(--ivory)] px-4 py-6 text-[var(--stone)] sm:px-6">
+            <div className="mx-auto max-w-6xl space-y-5">
+                <HeroSection
+                    weather={weatherData?.current ?? null}
+                    weatherLabel={weatherCodeLabel(weatherData?.current.weather_code ?? 0)}
+                />
 
-                <section className="panel-rise rounded-2xl border border-white/70 bg-white/75 p-4 shadow-[0_20px_60px_-30px_rgba(15,23,42,0.35)] backdrop-blur sm:p-5">
-                    <SearchBar onSearch={handleSearch} />
-                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                        <span className="rounded-full bg-slate-900 px-3 py-1 font-medium text-white">
-                            Active city: {city}
-                        </span>
-                        <span className="rounded-full bg-white px-3 py-1">Map source: OpenStreetMap</span>
-                        {loading && (
-                            <span className="rounded-full bg-cyan-100 px-3 py-1 font-medium text-cyan-800">
-                                Updating...
-                            </span>
-                        )}
-                    </div>
+                {errorMessage && (
+                    <p className="fade-in rounded-2xl border border-[var(--gold)]/40 bg-[var(--gold)]/10 px-4 py-3 text-sm">
+                        {errorMessage}
+                    </p>
+                )}
+
+                <section className="fade-in grid grid-cols-1 gap-4 md:grid-cols-2">
+                    {isLoading ? (
+                        <>
+                            <LoadingSkeleton className="h-44" />
+                            <LoadingSkeleton className="h-44" />
+                        </>
+                    ) : (
+                        <>
+                            <article className="rounded-2xl border border-[var(--gold)]/30 bg-white p-5 shadow-sm">
+                                <h3 className="text-lg font-semibold">Weather Summary</h3>
+                                {weatherData ? (
+                                    <div className="mt-3 space-y-2 text-sm">
+                                        <p>
+                                            <strong>Current:</strong>{" "}
+                                            {Math.round(weatherData.current.temperature_2m)}C
+                                        </p>
+                                        <p>
+                                            <strong>Condition:</strong>{" "}
+                                            {weatherCodeLabel(weatherData.current.weather_code)}
+                                        </p>
+                                        <p>
+                                            <strong>Wind:</strong> {weatherData.current.wind_speed_10m} km/h
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <p className="mt-3 text-sm text-[var(--stone)]/80">
+                                        Weather data unavailable right now.
+                                    </p>
+                                )}
+                            </article>
+
+                            <article className="rounded-2xl border border-[var(--gold)]/30 bg-white p-5 shadow-sm">
+                                <h3 className="text-lg font-semibold">USD to KHR</h3>
+                                {exchangeData ? (
+                                    <div className="mt-3">
+                                        <p className="text-3xl font-bold text-[var(--forest)]">
+                                            {exchangeData.conversion_rates.KHR.toLocaleString("en-US", {
+                                                maximumFractionDigits: 2,
+                                            })}{" "}
+                                            KHR
+                                        </p>
+                                        <p className="mt-1 text-xs text-[var(--stone)]/70">
+                                            Live refresh every 30s
+                                            {lastExchangeRefresh ? ` • Last sync ${lastExchangeRefresh}` : ""}
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <p className="mt-3 text-sm text-[var(--stone)]/80">
+                                        Exchange data unavailable right now.
+                                    </p>
+                                )}
+                            </article>
+                        </>
+                    )}
                 </section>
 
-                {error && (
-                    <p className="panel-rise rounded-2xl border border-red-200 bg-red-50/90 px-4 py-3 text-sm text-red-700">
-                        {error}
-                    </p>
-                )}
-
-                {notices.length > 0 && (
-                    <section className="panel-rise rounded-2xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-800">
-                        <p className="font-semibold">Some live data is unavailable right now:</p>
-                        <ul className="mt-1 list-disc pl-5">
-                            {notices.map((notice) => (
-                                <li key={notice}>{notice}</li>
-                            ))}
-                        </ul>
-                    </section>
-                )}
-
-                <section className="panel-rise">
-                    <MapPanel lat={coords.lat} lng={coords.lng} cityName={city} />
+                <section className="fade-in">
+                    {isLoading ? (
+                        <LoadingSkeleton className="h-80" />
+                    ) : (
+                        <WeatherCard data={weatherData} weatherCodeLabel={weatherCodeLabel} />
+                    )}
                 </section>
 
-                {(weather || stocks || notices.length > 0) && (
-                    <section className="grid gap-4 md:grid-cols-2">
-                        {weather ? (
-                            <WeatherPanel weather={weather} />
-                        ) : (
-                            <EmptyStateCard
-                                title="Weather"
-                                message="Weather data is unavailable. Add a valid OpenWeather key in .env.local to enable this panel."
-                            />
-                        )}
-                        {stocks ? (
-                            <StockPanel stocks={stocks} />
-                        ) : (
-                            <EmptyStateCard
-                                title="Markets"
-                                message="Stock data is unavailable. Add a valid Finnhub key in .env.local to enable this panel."
-                            />
-                        )}
-                    </section>
-                )}
+                <section className="fade-in space-y-2">
+                    <h2 className="text-xl font-semibold">Map</h2>
+                    <MapView />
+                </section>
 
-                {!hasSearched && !loading && (
-                    <p className="text-center text-sm text-slate-500">
-                        Search a city above to move the map and fetch weather and market data.
-                    </p>
-                )}
+                <section className="fade-in grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    {isLoading ? (
+                        <>
+                            <LoadingSkeleton className="h-96" />
+                            <LoadingSkeleton className="h-96" />
+                        </>
+                    ) : (
+                        <>
+                            <ExchangeCard exchangeData={exchangeData} />
+                            <CurrencyConverter exchangeData={exchangeData} />
+                        </>
+                    )}
+                </section>
+
+                <footer className="fade-in rounded-2xl border border-[var(--gold)]/30 bg-white p-6 shadow-sm">
+                    <h2 className="text-xl font-semibold">Quick Travel Tips</h2>
+                    <ul className="mt-3 grid gap-2 text-sm">
+                        <li>Start temple tours before 6:00 AM to avoid heat and crowds.</li>
+                        <li>Carry small USD bills and riel for local markets and tuk-tuks.</li>
+                        <li>Wear light, respectful clothing for temple visits.</li>
+                        <li>Stay hydrated and plan shaded breaks in midday heat.</li>
+                        <li>Book Tonle Sap lake visits in Oct-Dec for better water levels.</li>
+                    </ul>
+                </footer>
             </div>
         </main>
     );
